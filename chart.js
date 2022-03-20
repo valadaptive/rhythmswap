@@ -29,6 +29,11 @@ const PEAK_RES = 256;
 
 const BUTTONS = ['z', 'x', 'c', 'v'];
 
+const __rand = new Uint32Array(1);
+const id = () => {
+    return ('00000000' + crypto.getRandomValues(__rand)[0].toString(16)).slice(-8);
+};
+
 class App extends Component {
     constructor (props) {
         super(props);
@@ -41,8 +46,9 @@ class App extends Component {
             firstBeatOffset: 0,
             quantize: 4,
             volume: 1,
-            calibrationMode: false,
+            inputMode: 'input',
             calibrationMeasurements: null,
+            bpmMeasurements: null,
             latency: 0,
             error: null,
             loading: false
@@ -60,17 +66,25 @@ class App extends Component {
         this.scrollEnd = 1;
         this.currentTime = 0;
 
-        this.mouseButton = -1;
+        this.mouseButtons = [false, false, false, false, false];
+        this.mouseClicked = [false, false, false, false, false];
         this.keysPressed = new Set();
 
-        this.chart = [];
+        this.dragging = false;
+        this.dragStarted = false;
+        this.dragEnded = false;
+        this.dragStart = [0, 0];
+        this.draggedItem = null;
+
+        this.chart = {};
 
         this.setSong = this.setSong.bind(this);
         this.setBPM = this.setBPM.bind(this);
         this.setFirstBeatOffset = this.setFirstBeatOffset.bind(this);
+        this.setFirstBeatOffsetToCursor = this.setFirstBeatOffsetToCursor.bind(this);
         this.setQuantize = this.setQuantize.bind(this);
         this.setVolume = this.setVolume.bind(this);
-        this.setCalibrationMode = this.setCalibrationMode.bind(this);
+        this.setInputMode = this.setInputMode.bind(this);
         this.setLatency = this.setLatency.bind(this);
         this.setCanvas = this.setCanvas.bind(this);
         this.setCanvasContainer = this.setCanvasContainer.bind(this);
@@ -79,7 +93,8 @@ class App extends Component {
         this.onCanvasScroll = this.onCanvasScroll.bind(this);
         this.onCanvasMouseMove = this.onCanvasMouseMove.bind(this);
         this.onCanvasKeyDown = this.onCanvasKeyDown.bind(this);
-        this.onCanvasMouseClick = this.onCanvasMouseClick.bind(this);
+        this.onCanvasMouseDown = this.onCanvasMouseDown.bind(this);
+        this.onCanvasMouseUp = this.onCanvasMouseUp.bind(this);
     }
 
     static constructPeaks (audioData) {
@@ -129,7 +144,15 @@ class App extends Component {
                     });
                     this.scrollStart = 0;
                     this.scrollEnd = audio.duration;
-                    this.currentTime = 1;
+
+                    // set currentTime to first audibleish sample
+                    this.currentTime = 0;
+                    for (let i = 0; i < audioData.length; i++) {
+                        if (Math.abs(audioData[i]) > 2e-3) {
+                            this.currentTime = i / audio.sampleRate;
+                            break;
+                        }
+                    }
                     this.audioBuffer = audio;
                     this.audioData = audioData.slice(0);
                     this.audioPeaks = audioPeaks;
@@ -168,18 +191,23 @@ class App extends Component {
         }
     }
 
+    setFirstBeatOffsetToCursor () {
+        this.setState({firstBeatOffset: this.currentTime});
+    }
+
     setQuantize (quantize) {
         this.setState({quantize});
     }
 
     setVolume (event) {
-        this.gainNode.gain.value = event.target.value;
+        this.setState({volume: event.target.value});
     }
 
-    setCalibrationMode (event) {
+    setInputMode (inputMode) {
         this.setState({
-            calibrationMode: event.target.checked,
-            calibrationMeasurements: event.target.checked ? [] : null
+            inputMode,
+            calibrationMeasurements: inputMode === 'calibration' ? [] : null,
+            bpmMeasurements: inputMode === 'bpm' ? [] : null,
         });
     }
 
@@ -202,6 +230,12 @@ class App extends Component {
     componentDidMount () {
         this.requestId = window.requestAnimationFrame(this.update);
         document.body.addEventListener('keydown', this.onCanvasKeyDown);
+    }
+
+    componentDidUpdate (prevProps, prevState) {
+        if (prevState.volume !== this.state.volume) {
+            this.gainNode.gain.value = this.state.volume;
+        }
     }
 
     onCanvasScroll (event) {
@@ -231,15 +265,6 @@ class App extends Component {
         event.preventDefault();
     }
 
-    onCanvasMouseMove (event) {
-        const {left, top, width, height} = this.canvas.getBoundingClientRect();
-
-        const x = (event.clientX - left) * (this.canvas.width / width);
-        const y = (event.clientY - top) * (this.canvas.height / height);
-        this.canvasMousePosition[0] = x;
-        this.canvasMousePosition[1] = y;
-    }
-
     onCanvasKeyDown (event) {
         let preventDefault = true;
 
@@ -257,15 +282,35 @@ class App extends Component {
             case 'x':
             case 'c':
             case 'v': {
-                if (this.state.calibrationMode) {
-                    const time = this.getCurrentTime(false);
-                    const beat = this.quantizeTimeToBeat(time);
-                    const quantTime =  beat / (this.state.bpm / 60) + this.state.firstBeatOffset;
-                    // we don't care about properly updating calibrationMeasurements since we don't use it to render
-                    this.state.calibrationMeasurements.push(time - quantTime);
-                    this.setState({latency: (this.state.calibrationMeasurements.reduce((prev, cur) => prev + cur, 0) / this.state.calibrationMeasurements.length) * 1000});
-                } else {
-                    this.createBeat(event.key);
+                switch (this.state.inputMode) {
+                    case 'input': {
+                        this.createBeat(event.key);
+                        break;
+                    }
+                    case 'calibration': {
+                        const time = this.getCurrentTime(false);
+                        const beat = this.quantizeTimeToBeat(time);
+                        const quantTime =  beat / (this.state.bpm / 60) + this.state.firstBeatOffset;
+                        // we don't care about properly updating calibrationMeasurements since we don't use it to render
+                        this.state.calibrationMeasurements.push(time - quantTime);
+                        this.setState({latency: (this.state.calibrationMeasurements.reduce((prev, cur) => prev + cur, 0) / this.state.calibrationMeasurements.length) * 1000});
+                        break;
+                    }
+                    case 'bpm': {
+                        // we don't care about properly updating bpmMeasurements since we don't use it to render
+                        const {bpmMeasurements} = this.state;
+                        bpmMeasurements.push(this.getCurrentTime());
+                        if (bpmMeasurements.length > 1) {
+                            let sum = 0;
+                            for (let i = 1; i < bpmMeasurements.length; i++) {
+                                sum += bpmMeasurements[i] - bpmMeasurements[i - 1];
+                            }
+                            sum /= (bpmMeasurements.length - 1);
+
+                            this.setState({bpm: parseFloat((60 / sum).toFixed(2))});
+                        }
+                        break;
+                    }
                 }
                 break;
             }
@@ -281,8 +326,54 @@ class App extends Component {
         if (preventDefault) event.preventDefault();
     }
 
-    onCanvasMouseClick (event) {
-        this.mouseButton = event.button;
+    startDrag (item) {
+        this.dragStarted = false;
+        this.dragging = true;
+        this.draggedItem = item;
+    }
+
+    endDrag (cb) {
+        if (cb) cb();
+        this.dragEnded = false;
+        this.draggedItem = null;
+    }
+
+    onCanvasMouseMove (event) {
+        const {left, top, width, height} = this.canvas.getBoundingClientRect();
+
+        if (this.mouseButtons[0] && !(this.dragStarted || this.dragging)) {
+            this.dragStarted = true;
+            this.dragStart[0] = this.canvasMousePosition[0];
+            this.dragStart[1] = this.canvasMousePosition[1];
+        }
+
+        const x = (event.clientX - left) * (this.canvas.width / width);
+        const y = (event.clientY - top) * (this.canvas.height / height);
+        this.canvasMousePosition[0] = x;
+        this.canvasMousePosition[1] = y;
+    }
+
+    onCanvasMouseDown (event) {
+        for (let i = 0; i < 5; i++) {
+            if ((event.buttons & (1 << i)) !== 0) {
+                this.mouseButtons[i] = true;
+                this.mouseClicked[i] = true;
+            }
+        }
+        event.preventDefault();
+    }
+
+    onCanvasMouseUp (event) {
+        for (let i = 0; i < 5; i++) {
+            // if buttons === 0, release all buttons
+            if ((event.buttons & (1 << i)) !== 0 || event.buttons === 0) {
+                this.mouseButtons[i] = false;
+            }
+        }
+        if (this.dragging) {
+            this.dragEnded = true;
+            this.dragging = false;
+        }
         event.preventDefault();
     }
 
@@ -291,18 +382,19 @@ class App extends Component {
         return this.currentTime + (this.audioContext.currentTime - this.playbackStartTime) - (latencyCompensate ? this.state.latency / 1000 : 0);
     }
 
+    quantizeBeat (beat, quantize = this.state.quantize) {
+        return quantize === 0 ? beat : Math.round(beat * this.state.quantize) / quantize;
+    }
+
     quantizeTimeToBeat (time, quantize = this.state.quantize) {
         const beat = (time - this.state.firstBeatOffset) * (this.state.bpm / 60);
-        const quantized = quantize === 0 ? beat : Math.round(beat * this.state.quantize) / quantize;
-        return quantized;
+        return this.quantizeBeat(beat);
     }
 
     createBeat (key) {
         const beat = this.quantizeTimeToBeat(this.getCurrentTime());
-        this.chart.push({
-            beat,
-            key
-        });
+        const beatID = id();
+        this.chart[beatID] = {beat, key, id: beatID};
     }
 
     drawWaveform (ctx, width, height) {
@@ -403,7 +495,7 @@ class App extends Component {
             z: 'red',
             x: 'green',
             c: 'blue',
-            v: 'yellow'
+            v: '#ee8800'
         };
         const beatHeights = {
             z: 0,
@@ -424,41 +516,96 @@ class App extends Component {
 
         const beatsToSecs = beat => beat / (this.state.bpm / 60) + this.state.firstBeatOffset;
         const beatsToPixels = beat => (beatsToSecs(beat) - this.scrollStart) * (width / windowDuration);
+
+        const secsToBeats = secs => secs * (this.state.bpm / 60);
+        const pixelsToBeats = pixels => secsToBeats((pixels / (width / windowDuration)));
+
         const LINE_WIDTH = 1;
         const TRIANGLE_SIZE = 4;
         const TEXT_PADDING = Math.max(1, Math.min(fontSize / 8, 4));
 
-        for (let i = 0; i < this.chart.length; i++) {
-            const beat = this.chart[i];
-            const x = beatsToPixels(beat.beat);
-            const top = beatHeights[beat.key] * bHeight;
-            const bottom = top + bHeight;
-            ctx.fillStyle = beatColors[beat.key];
+        const drawBeat = (x, y, color, alpha, character, ghost = false) => {
+            ctx.globalAlpha = alpha;
+            const bottom = y + bHeight;
 
-            if (this.regionHovered(x, top, charWidth + LINE_WIDTH + (TEXT_PADDING * 2), bHeight)) {
-                this.canvas.style.cursor = 'pointer';
-                ctx.globalAlpha = 0.625;
-
-                if (this.keysPressed.has('Delete')) {
-                    this.chart.splice(i, 1);
-                    i--;
-                }
+            ctx.fillStyle = color;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = LINE_WIDTH * 2;
+            if (ghost) {
+                ctx.strokeRect(x - LINE_WIDTH, y + LINE_WIDTH, charWidth + (LINE_WIDTH * 2) + (TEXT_PADDING * 2), bHeight - (LINE_WIDTH * 2));
             } else {
-                ctx.globalAlpha = 0.325;
+                ctx.fillRect(x, y, charWidth + LINE_WIDTH + (TEXT_PADDING * 2), bHeight);
             }
-            ctx.fillRect(x, top, charWidth + LINE_WIDTH + (TEXT_PADDING * 2), bHeight);
 
             ctx.globalAlpha = 1;
             ctx.beginPath();
-            ctx.moveTo(LINE_WIDTH + x, top);
-            ctx.lineTo(-LINE_WIDTH - TRIANGLE_SIZE + x, top);
-            ctx.lineTo(-LINE_WIDTH + x, top + TRIANGLE_SIZE);
+            ctx.moveTo(LINE_WIDTH + x, y);
+            ctx.lineTo(-LINE_WIDTH - TRIANGLE_SIZE + x, y);
+            ctx.lineTo(-LINE_WIDTH + x, y + TRIANGLE_SIZE);
             ctx.lineTo(-LINE_WIDTH + x, bottom);
             ctx.lineTo(LINE_WIDTH + x, bottom);
             ctx.fill();
 
-            ctx.fillStyle = 'black';
-            ctx.fillText(beat.key, x + LINE_WIDTH + TEXT_PADDING, top + (bHeight / 2));
+            ctx.fillStyle = ghost ? color : 'black';
+            ctx.fillText(character, x + LINE_WIDTH + TEXT_PADDING, y + (bHeight / 2));
+        }
+
+        const beatAndRowFromMouse = beat => {
+            const [mx, my] = this.canvasToLocal(...this.canvasMousePosition);
+            const [dx, dy] = this.canvasToLocal(...this.dragStart);
+            const newBeat = this.quantizeBeat(pixelsToBeats(mx - dx) + beat.beat);
+            const newRow = Math.round(((my - dy) / bHeight) + beatHeights[beat.key]);
+            return [newBeat, newRow];
+        }
+
+        for (const i in this.chart) {
+            if (!Object.prototype.hasOwnProperty.call(this.chart, i)) continue;
+            const beat = this.chart[i];
+
+            if (this.dragEnded && this.draggedItem === beat.id) {
+                this.endDrag(() => {
+                    const [newBeat, newRow] = beatAndRowFromMouse(beat);
+                    beat.beat = newBeat;
+                    beat.key = BUTTONS[newRow];
+                });
+            }
+
+            const x = beatsToPixels(beat.beat);
+            const y = beatHeights[beat.key] * bHeight;
+            ctx.fillStyle = beatColors[beat.key];
+
+            let alpha = 0.325;
+            if (this.regionHovered(x, y, charWidth + LINE_WIDTH + (TEXT_PADDING * 2), bHeight)) {
+                this.canvas.style.cursor = 'pointer';
+                alpha = 0.625;
+
+                if (this.keysPressed.has('Delete')) {
+                    delete this.chart[beat.id];
+                    continue;
+                }
+
+                if (this.dragStarted) {
+                    this.startDrag(beat.id);
+                }
+            }
+
+            if (this.draggedItem === beat.id) {
+                ctx.globalAlpha = 0.125;
+                const [newBeat, newRow] = beatAndRowFromMouse(beat);
+
+                drawBeat(beatsToPixels(newBeat), newRow * bHeight, beatColors[BUTTONS[newRow]], 0.325, BUTTONS[newRow], true);
+
+                ctx.save();
+                const [mx, my] = this.canvasToLocal(...this.canvasMousePosition);
+                const [dx, dy] = this.canvasToLocal(...this.dragStart);
+                ctx.translate(mx - dx, my - dy);
+            }
+
+            drawBeat(x, y, beatColors[beat.key], alpha, beat.key);
+
+            if (this.draggedItem === beat.id) {
+                ctx.restore();
+            }
         }
     }
 
@@ -481,18 +628,32 @@ class App extends Component {
         this.playing = false;
     }
 
-    regionHovered (x, y, width, height) {
+    canvasToLocal(x, y) {
         const {a, b, c, d, e, f} = this.ctx.getTransform().invertSelf();
-        const mouseX = a * this.canvasMousePosition[0] + c * this.canvasMousePosition[1] + e;
-        const mouseY = b * this.canvasMousePosition[0] + d * this.canvasMousePosition[1] + f;
+        return [
+            a * x + c * y + e,
+            b * x + d * y + f
+        ];
+    }
+
+    localToCanvas(x, y) {
+        const {a, b, c, d, e, f} = this.ctx.getTransform();
+        return [
+            a * x + c * y + e,
+            b * x + d * y + f
+        ];
+    }
+
+    regionHovered (x, y, width, height) {
+        const [mouseX, mouseY] = this.canvasToLocal(this.canvasMousePosition[0], this.canvasMousePosition[1]);
         return mouseX >= x &&
         mouseX < x + width &&
         mouseY >= y &&
         mouseY < y + height;
     }
 
-    regionClicked (x, y, width, height) {
-        return this.mouseButton > -1 && this.regionHovered(x, y, width, height);
+    regionClicked (x, y, width, height, button = 0) {
+        return this.mouseClicked[button] && this.regionHovered(x, y, width, height);
     }
 
     update () {
@@ -551,9 +712,14 @@ class App extends Component {
 
         ctx.restore();
 
-        this.requestId = window.requestAnimationFrame(this.update);
-        this.mouseButton = -1;
+        for (let i = 0; i < this.mouseClicked.length; i++) {
+            this.mouseClicked[0] = false;
+        }
+        this.dragStarted = false;
+        this.dragEnded = false;
         this.keysPressed.clear();
+
+        this.requestId = window.requestAnimationFrame(this.update);
     }
 
     componentWillUnmount () {
@@ -582,7 +748,8 @@ class App extends Component {
                     <div className="first-beat">
                         <span class="setting-label">First beat offset: </span>
                         <input type="number" value=${this.state.firstBeatOffset} onChange=${this.setFirstBeatOffset} />
-                        <span class="setting-label"> sec</span>
+                        <span class="setting-label"> sec </span>
+                        <button onClick=${this.setFirstBeatOffsetToCursor}>To cursor</button>
                     </div>
                     <div className="quantize">
                         <span class="setting-label">Quantize: </span>
@@ -598,8 +765,15 @@ class App extends Component {
                 </div>
                 <div class="settings">
                     <div className="calibration-mode">
-                        <span class="setting-label">Calibration mode: </span>
-                        <input type="checkbox" onChange=${this.setCalibrationMode} checked=${this.state.calibrationMode} />
+                        <span class="setting-label">Input mode: </span>
+                        <${ButtonGroup}
+                            options=${[
+                                {id: 'input', value: 'Input notes'},
+                                {id: 'bpm', value: 'Tap for BPM'},
+                                {id: 'calibration', value: 'Calibrate latency'},
+                            ]}
+                            selected=${this.state.inputMode}
+                            onChange=${this.setInputMode}/>
                     </div>
                     <div className="latency">
                         <span class="setting-label">Latency (ms): </span>
@@ -612,7 +786,8 @@ class App extends Component {
                         ref=${this.setCanvas}
                         onWheel=${this.onCanvasScroll}
                         onMouseMove=${this.onCanvasMouseMove}
-                        onClick=${this.onCanvasMouseClick}
+                        onMouseDown=${this.onCanvasMouseDown}
+                        onMouseUp=${this.onCanvasMouseUp}
                     />
                 </div>
             </div>

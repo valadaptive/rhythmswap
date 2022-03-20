@@ -1,6 +1,8 @@
 :root {
     --border: 1px solid grey;
     --primary: rgb(46, 121, 235);
+    --primary-hover: rgb(65, 148, 216);
+    --primary-active: rgb(41, 92, 202);
     --btn-text: white;
     --hover: rgb(235, 235, 235);
 }
@@ -16,15 +18,37 @@ body {
 }
 
 input[type=number] {
-    width: 4em;
+    width: 5em;
+}
+
+button {
+    background-color: var(--primary);
+    color: var(--btn-text);
+    border: none;
+    margin: 0.125em;
+    padding: 0.25em 0.5em;
+    cursor: pointer;
+    border-radius: 0.25em;
+    font-size: 1em;
+    font-weight: normal;
+}
+
+button:hover {
+    background-color: var(--primary-hover);
+}
+
+button:active {
+    background-color: var(--primary-active);
 }
 
 .button-group {
     display: flex;
+    font-size: 80%;
+    font-weight: 500;
 }
 
 .group-button {
-    margin: 0.125em;
+    margin: 0 0.0625em;
     padding: 0.25em 0.5em;
     cursor: pointer;
     border-radius: 0.25em;
@@ -49,7 +73,7 @@ input[type=number] {
 
 .settings {
     display: flex;
-    padding: 1em 0;
+    padding: 0.5em 0;
 }
 
 .settings > * {

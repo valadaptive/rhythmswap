@@ -445,16 +445,16 @@ class App extends Component {
             i *= 2;
         }
 
-        ctx.lineWidth = 1.5;
-        ctx.strokeStyle = 'black';
+        const LINE_WIDTH = 1.5;
+        ctx.fillStyle = 'black';
         for (const subdiv of subdivs) {
+            // Skip subdivisions that are too small (<4px) to be useful
+            if (subdiv > 1 && scale / subdiv < 4) continue;
             ctx.globalAlpha = 1 / subdiv;
-            ctx.beginPath();
             for (let i = 0; i < (numBeats + 1) * subdiv; i++) {
-                ctx.moveTo(((i / subdiv) - 1) * scale + offset, 0);
-                ctx.lineTo(((i / subdiv) - 1) * scale + offset, height);
+                const x = ((i / subdiv) - 1) * scale + offset;
+                ctx.fillRect(x - (LINE_WIDTH * 0.5), 0, LINE_WIDTH, height);
             }
-            ctx.stroke();
         }
 
         const secsToPixels = s => (s - this.scrollStart) * (width / windowDuration);

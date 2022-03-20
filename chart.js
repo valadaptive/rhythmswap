@@ -664,6 +664,9 @@ class App extends Component {
         this.audioSource.start(0, this.currentTime);
         this.playbackStartTime = this.audioContext.currentTime;
         this.playing = true;
+
+        if (this.bpmMeasurements && this.bpmMeasurements.length > 0) this.bpmMeasurements.length = 0;
+        if (this.calibrationMeasurements && this.calibrationMeasurements.length > 0) this.calibrationMeasurements.length = 0;
     }
 
     stop () {

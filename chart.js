@@ -99,6 +99,7 @@ class App extends Component {
 
     static constructPeaks (audioData) {
         const peakBuf = new Float32Array(Math.ceil(audioData.length / PEAK_RES));
+        const troughBuf = new Float32Array(Math.ceil(audioData.length / PEAK_RES));
 
         let i = 0;
         let len = audioData.length;
@@ -106,26 +107,30 @@ class App extends Component {
         let highest = 0;
         for (let i = 0; i < numChunks; i++) {
             const offset = i * PEAK_RES;
-            let max = 0;
+            let max = -Infinity;
+            let min = Infinity;
             for (let j = 0; j < PEAK_RES; j++) {
-                const absVal = Math.abs(audioData[offset + j]);
-                max = absVal > max ? absVal : max;
+                max = audioData[offset + j] > max ? audioData[offset + j] : max;
+                min = audioData[offset + j] < min ? audioData[offset + j] : min;
             }
             peakBuf[i] = max;
-            highest = max > highest ? max : highest;
+            troughBuf[i] = min;
+            highest = Math.abs(max) > highest ? Math.abs(max) : highest;
         }
         if (numChunks * PEAK_RES !== len) {
             const offset = numChunks * PEAK_RES;
-            let max = 0;
+            let max = -Infinity;
+            let min = Infinity;
             for (let j = 0; j < len - offset; j++) {
-                const absVal = Math.abs(audioData[offset + j]);
-                max = absVal > max ? absVal : max;
+                max = audioData[offset + j] > max ? audioData[offset + j] : max;
+                min = audioData[offset + j] < min ? audioData[offset + j] : min;
             }
             peakBuf[peakBuf.length - 1] = max;
-            highest = max > highest ? max : highest;
+            troughBuf[troughBuf.length - 1] = min;
+            highest = Math.abs(max) > highest ? Math.abs(max) : highest;
         }
 
-        return {audioPeaks: peakBuf, highest};
+        return {audioPeaks: peakBuf, audioTroughs: troughBuf, highest};
     }
 
     setSong (event) {
@@ -138,7 +143,7 @@ class App extends Component {
                 reader.result,
                 audio => {
                     const audioData = audio.getChannelData(0);
-                    const {audioPeaks, highest} = App.constructPeaks(audioData);
+                    const {audioPeaks, audioTroughs, highest} = App.constructPeaks(audioData);
                     this.setState({
                         loading: false
                     });
@@ -156,6 +161,7 @@ class App extends Component {
                     this.audioBuffer = audio;
                     this.audioData = audioData.slice(0);
                     this.audioPeaks = audioPeaks;
+                    this.audioTroughs = audioTroughs;
                     this.highestSample = highest;
                 },
                 error => {
@@ -406,27 +412,69 @@ class App extends Component {
         let startSample = (this.scrollStart * this.audioBuffer.sampleRate) / PEAK_RES;
         let endSample = (this.scrollEnd * this.audioBuffer.sampleRate) / PEAK_RES;
         let samplesInWindow = endSample - startSample;
-        let buf = this.audioPeaks;
+        const heightMul = (height / 2) / this.highestSample;
         if (samplesInWindow / width < 1) {
             startSample = this.scrollStart * this.audioBuffer.sampleRate;
             endSample = this.scrollEnd * this.audioBuffer.sampleRate;
             samplesInWindow = endSample - startSample;
-            buf = this.audioData;
-        }
-        ctx.fillStyle = 'black';
-        for (let i = 0; i < width; i++) {
-            const startColSample = Math.round(((i * samplesInWindow) / width) + startSample);
-            const endColSample = Math.max(Math.round((((i + 1) * samplesInWindow) / width) + startSample), startColSample + 1);
+            const buf = this.audioData;
 
-            let max = 0;
-            for (let j = startColSample; j < endColSample; j++) {
-                max = Math.abs(buf[j]) > max ? Math.abs(buf[j]) : max;
+            if (samplesInWindow / width < 4) {
+                const sampleWidth = width / samplesInWindow;
+                const pixelOffset = (Math.floor(startSample) - startSample) * sampleWidth;
+                startSample = Math.floor(startSample);
+                endSample = Math.min(Math.ceil(endSample) + 1, buf.length);
+                samplesInWindow = endSample - startSample;
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(pixelOffset, buf[startSample] * heightMul + (height / 2));
+                for (let i = 1; i < samplesInWindow; i++) {
+                    ctx.lineTo((i * sampleWidth) + pixelOffset, buf[startSample + i] * heightMul + (height / 2));
+                }
+                ctx.stroke();
+            } else {
+                ctx.fillStyle = 'black';
+                for (let i = 0; i < width; i++) {
+                    let startColSample = Math.round(((i * samplesInWindow) / width) + startSample);
+                    let endColSample = Math.max(Math.round((((i + 1) * samplesInWindow) / width) + startSample), startColSample + 1);
+
+                    startColSample = Math.max(0, startColSample - 1);
+                    endColSample = Math.min(buf.length - 1, endColSample + 1);
+
+                    let max = -Infinity;
+                    let min = Infinity;
+                    for (let j = startColSample; j < endColSample; j++) {
+                        max = buf[j] > max ? buf[j] : max;
+                        min = buf[j] < min ? buf[j] : min;
+                    }
+
+                    const rectHeight = Math.max(1, (max - min) * heightMul);
+                    const rectTop = min * heightMul;
+
+                    ctx.fillRect(i, (height / 2) + rectTop, 1, rectHeight);
+                }
             }
+        } else {
+            const peaks = this.audioPeaks;
+            const troughs = this.audioTroughs;
+            ctx.fillStyle = 'black';
+            for (let i = 0; i < width; i++) {
+                let startColSample = Math.round(((i * samplesInWindow) / width) + startSample);
+                let endColSample = Math.max(Math.round((((i + 1) * samplesInWindow) / width) + startSample), startColSample + 1);
 
-            const heightMul = height / this.highestSample;
-            const rectHeight = Math.max(1, max * heightMul);
+                let max = -Infinity;
+                let min = Infinity;
+                for (let j = startColSample; j < endColSample; j++) {
+                    max = peaks[j] > max ? peaks[j] : max;
+                    min = troughs[j] < min ? troughs[j] : min;
+                }
 
-            ctx.fillRect(i, (height / 2) - (rectHeight / 2), 1, rectHeight);
+                const rectHeight = Math.max(1, (max - min) * heightMul);
+                const rectTop = min * heightMul;
+
+                ctx.fillRect(i, (height / 2) + rectTop, 1, rectHeight);
+            }
         }
     }
 

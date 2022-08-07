@@ -764,7 +764,7 @@ class App extends Component {
         ctx.restore();
 
         for (let i = 0; i < this.mouseClicked.length; i++) {
-            this.mouseClicked[0] = false;
+            this.mouseClicked[i] = false;
         }
         this.dragStarted = false;
         this.dragEnded = false;
